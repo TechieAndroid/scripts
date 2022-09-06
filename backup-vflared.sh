@@ -1,7 +1,8 @@
 #!/bin/bash
-#DATE-TIME=date +%F_%R
+#DATE-TIME=$(date +%F_%R)
+#DATE-TIME=$(date +%Y%m%d)
 
-OF=/home/recompiler/backups/vflared/backup-$(%Y%m%d_%F_%R)
+OF=/home/recompiler/backups/vflared/backup-$(date +%F_%R)
 DOCKER=/home/recompiler/docker
 HTTPD=/home/recompiler/docker/httpd
 HOME1=/home/recompiler/scripts
