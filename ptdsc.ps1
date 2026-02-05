@@ -17,9 +17,14 @@ if (-not $wingetInstalled) {
 }
 
 # Install PowerToys
-$installResult = Start-Process -FilePath "winget" -ArgumentList "install", "--id", "Microsoft.PowerToys", "--scope", "machine", "--silent", "--accept-package-agreements", "--accept-source-agreements" -Wait -NoNewWindow -PassThru
-if ($installResult.ExitCode -ne 0) {
-    Write-Error "❌ Failed to install PowerToys."
+try {
+    $process = Start-Process -FilePath "winget" -ArgumentList "install", "--id", "Microsoft.PowerToys", "--scope", "machine", "--silent", "--accept-package-agreements", "--accept-source-agreements" -Wait -NoNewWindow -PassThru
+    if ($process.ExitCode -ne 0) {
+        Write-Error "❌ Failed to install PowerToys. Exit code: $($process.ExitCode)"
+        exit 1
+    }
+} catch {
+    Write-Error "❌ Error installing PowerToys: $_"
     exit 1
 }
 
@@ -49,29 +54,31 @@ Start-Sleep -Seconds 2
 Write-Host "🔧 Disabling unwanted modules..." -ForegroundColor Cyan
 $settingsPath = "$env:LOCALAPPDATA\Microsoft\PowerToys\settings.json"
 
+# All available modules
+$allModules = @(
+    "AdvancedPaste","AlwaysOnTop","Awake","ColorPicker","CropAndLock","EnvironmentVariables",
+    "FancyZones","FileLocksmith","FindMyMouse","Hosts","ImageResizer","KeyboardManager","MeasureTool",
+    "MouseHighlighter","MouseJump","MousePointerCrosshairs","Peek","PowerAccent","PowerOCR","PowerRename",
+    "RegistryPreview","ShortcutGuide","TextExtractor","VideoConference","Workspaces","ZoomIt"
+)
+
 if (Test-Path $settingsPath) {
     # Backup original settings
-    $backupPath = "$settingsPath.backup-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+    $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+    $backupPath = "$settingsPath.backup-$timestamp"
     Copy-Item $settingsPath $backupPath -Force
     Write-Host "📁 Backup created: $backupPath" -ForegroundColor Gray
     
     # Read and modify settings
     $settings = Get-Content $settingsPath -Raw | ConvertFrom-Json
     
-    # All available modules
-    $allModules = @(
-        "AdvancedPaste","AlwaysOnTop","Awake","ColorPicker","CropAndLock","EnvironmentVariables",
-        "FancyZones","FileLocksmith","FindMyMouse","Hosts","ImageResizer","KeyboardManager","MeasureTool",
-        "MouseHighlighter","MouseJump","MousePointerCrosshairs","Peek","PowerAccent","PowerOCR","PowerRename",
-        "RegistryPreview","ShortcutGuide","TextExtractor","VideoConference","Workspaces","ZoomIt"
-    )
-    
     # Enable only selected modules
     foreach ($module in $allModules) {
         $moduleKey = "{$module}"
         if ($settings.enabled.$moduleKey) {
-            $settings.enabled.$moduleKey.value = $enabledModules -contains $module
-            Write-Host "  $(if ($enabledModules -contains $module) {'✅ Enabled'} else {'❌ Disabled'}) $module"
+            $shouldEnable = $enabledModules -contains $module
+            $settings.enabled.$moduleKey.value = $shouldEnable
+            Write-Host "  $(if ($shouldEnable) {'✅ Enabled'} else {'❌ Disabled'}) $module"
         }
     }
     
@@ -91,9 +98,16 @@ if (Test-Path $settingsPath) {
     
     # Add module states
     foreach ($module in $allModules) {
-        $defaultSettings.enabled["{$module}"] = @{
+        $moduleKey = "{$module}"
+        $defaultSettings.enabled[$moduleKey] = @{
             "value" = $enabledModules -contains $module
         }
+    }
+    
+    # Ensure directory exists
+    $settingsDir = Split-Path $settingsPath -Parent
+    if (-not (Test-Path $settingsDir)) {
+        New-Item -ItemType Directory -Path $settingsDir -Force
     }
     
     $defaultSettings | ConvertTo-Json -Depth 10 | Out-File $settingsPath -Encoding UTF8
@@ -112,7 +126,8 @@ foreach ($module in $enabledModules) {
             & $dscExe set --module $module --resource settings --input $configJson
             Write-Host "✅ Configured $module" -ForegroundColor Green
         } catch {
-            Write-Warning "⚠️ Could not configure $module: $_"
+            $errorMsg = $_.Exception.Message
+            Write-Warning "⚠️ Could not configure $module: $errorMsg"
         }
     } else {
         Write-Warning "⚠️ No configuration file for $module"
@@ -125,6 +140,15 @@ $powertoysExe = "$powerToysPath\PowerToys.exe"
 if (Test-Path $powertoysExe) {
     Start-Process $powertoysExe
     Write-Host "✅ PowerToys started." -ForegroundColor Green
+} else {
+    # Try program files location
+    $powertoysExe = "C:\Program Files\PowerToys\PowerToys.exe"
+    if (Test-Path $powertoysExe) {
+        Start-Process $powertoysExe
+        Write-Host "✅ PowerToys started." -ForegroundColor Green
+    } else {
+        Write-Warning "⚠️ Could not find PowerToys.exe to start"
+    }
 }
 
 # Summary
