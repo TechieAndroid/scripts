@@ -23,9 +23,9 @@ if (-not (Test-Path $dscExe)) {
     exit 1
 }
 
-# Step 3: Enable only selected modules
-Write-Host "`n🔧 Enabling selected modules..."
-$modules = @("AdvancedPaste", "PowerOCR", "FancyZones", "Workspaces")
+# Step 3: Disable all modules except the selected ones
+Write-Host "`n🔧 Configuring PowerToys modules..."
+$enabledModules = @("AdvancedPaste", "PowerOCR", "FancyZones", "Workspaces")
 $allModules = @(
     "AdvancedPaste","AlwaysOnTop","App","Awake","ColorPicker","CropAndLock","EnvironmentVariables",
     "FancyZones","FileLocksmith","FindMyMouse","Hosts","ImageResizer","KeyboardManager","MeasureTool",
@@ -33,48 +33,100 @@ $allModules = @(
     "RegistryPreview","ShortcutGuide","Workspaces","ZoomIt"
 )
 
-# Build the correct JSON structure using ordered hashtables
-$enabledMap = [ordered]@{}
+# Create a hashtable with all modules disabled by default
+$moduleStates = [ordered]@{}
 foreach ($module in $allModules) {
-    $enabledMap[$module] = $modules -contains $module
+    $moduleStates[$module] = $enabledModules -contains $module
 }
+
+# Create the JSON structure
 $settings = [ordered]@{
-    name = "App"
-    version = "1.0"
+    name = "General"
+    version = "1"
     properties = [ordered]@{
-        enabled = $enabledMap
+        startup_launch_enabled = $true
+        enabled = $moduleStates
+        is_elevated = $true
+        run_elevated = $false
+        is_admin = $true
+        download_updates_automatically = $true
+        show_updates_notifications = $true
     }
 }
 
-# Write to temp file with correct encoding and compression
-$tempJsonPath = "$env:TEMP\powertoys_enabled_modules.json"
-$settings | ConvertTo-Json -Depth 10 -Compress | Out-File -FilePath $tempJsonPath -Encoding utf8NoBOM
+# Write to temp file
+$tempJsonPath = "$env:TEMP\powertoys_modules_config.json"
+$settings | ConvertTo-Json -Depth 5 | Out-File -FilePath $tempJsonPath -Encoding utf8NoBOM
 
-# Read the JSON file content and pass it correctly
-$jsonContent = Get-Content $tempJsonPath -Raw
-& $dscExe set --resource settings --input $jsonContent
-Write-Host "✅ Selected modules enabled.`n"
+# Apply the settings
+try {
+    $jsonContent = Get-Content $tempJsonPath -Raw
+    & $dscExe set --module "General" --resource settings --input $jsonContent
+    Write-Host "✅ Module configuration applied successfully.`n"
+} catch {
+    Write-Host "❌ Error applying module configuration: $_"
+}
 
-# Step 4: Reapply settings for each module
-Write-Host "📂 Reapplying module settings..."
+# Step 4: Apply module-specific settings
+Write-Host "📂 Applying module-specific settings..."
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
-foreach ($module in $modules) {
+
+# First, let's check what format the JSON files should have
+foreach ($module in $enabledModules) {
     $inputPath = Join-Path $scriptDir "$module.json"
     if (Test-Path $inputPath) {
         try {
-            # Read the JSON file content
+            # Read the JSON file
             $moduleJson = Get-Content $inputPath -Raw
             
-            # Debug: Check what we're passing
-            # Write-Host "Applying JSON for $module : $moduleJson"
+            # Check if the JSON has the "settings" wrapper
+            $jsonObject = $moduleJson | ConvertFrom-Json
             
-            # Pass the JSON content directly
+            if ($jsonObject.PSObject.Properties.Name -contains "settings") {
+                # Extract just the settings object content
+                $settingsContent = $jsonObject.settings
+                
+                # Ensure it has name and version at the top level
+                if (-not $settingsContent.PSObject.Properties.Name -contains "name") {
+                    $settingsContent | Add-Member -NotePropertyName "name" -NotePropertyValue $module -Force
+                }
+                if (-not $settingsContent.PSObject.Properties.Name -contains "version") {
+                    $settingsContent | Add-Member -NotePropertyName "version" -NotePropertyValue "1" -Force
+                }
+                
+                $moduleJson = $settingsContent | ConvertTo-Json -Depth 10 -Compress
+            } else {
+                # Ensure it has name and version
+                if (-not $jsonObject.PSObject.Properties.Name -contains "name") {
+                    $jsonObject | Add-Member -NotePropertyName "name" -NotePropertyValue $module -Force
+                }
+                if (-not $jsonObject.PSObject.Properties.Name -contains "version") {
+                    $jsonObject | Add-Member -NotePropertyName "version" -NotePropertyValue "1" -Force
+                }
+                
+                $moduleJson = $jsonObject | ConvertTo-Json -Depth 10 -Compress
+            }
+            
+            # Apply the settings
             & $dscExe set --module $module --resource settings --input $moduleJson
             Write-Host ("✅ Applied settings for {0}" -f $module)
+            
         } catch {
-            Write-Host ("❌ Error applying {0}: {1}" -f $module, $_.Exception.Message)
+            Write-Host ("❌ Error processing {0}: {1}" -f $module, $_.Exception.Message)
+            Write-Host ("   Trying raw JSON...")
+            
+            # Try with raw JSON as fallback
+            try {
+                & $dscExe set --module $module --resource settings --input $moduleJson
+                Write-Host ("✅ Applied settings for {0} (raw)" -f $module)
+            } catch {
+                Write-Host ("❌ Failed to apply settings for {0}: {1}" -f $module, $_.Exception.Message)
+            }
         }
     } else {
-        Write-Host ("⚠️ Missing file: {0}" -f $inputPath)
+        Write-Host ("⚠️ Missing settings file: {0}" -f $inputPath)
     }
 }
+
+Write-Host "`n🎉 PowerToys configuration complete!"
+Write-Host "Enabled modules: $($enabledModules -join ', ')"
